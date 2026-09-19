@@ -70,7 +70,14 @@ def _filters_from_query(
 @router.get("/health")
 def health():
     session = get_session()
-    return {"status": "ok", "has_data": has_data(), "session_id": session.session_id}
+    return {
+        "status": "ok",
+        "has_data": has_data(),
+        "session_id": session.session_id,
+        # Boolean only - never the key itself or its length in an HTTP response.
+        # Lets you confirm Render picked up GROQ_API_KEY without checking logs.
+        "groq_configured": bool(settings.groq_api_key),
+    }
 
 
 @router.get("/session")

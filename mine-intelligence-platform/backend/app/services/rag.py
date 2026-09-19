@@ -745,7 +745,12 @@ Follow these rules at all times:
 
 
 def _groq_client() -> Any:
-    if Groq is None or not settings.groq_api_key:
+    if Groq is None:
+        logger.error("groq package is not installed; falling back to local phrasing")
+        return None
+    if not settings.groq_api_key:
+        # Already logged loudly at startup in config.py - keep this quiet per-call to
+        # avoid spamming logs on every chat message, but never pretend it's configured.
         return None
     try:
         return Groq(api_key=settings.groq_api_key)
