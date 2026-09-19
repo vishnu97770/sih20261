@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..config import settings
-from ..services import analytics, document_service, insights, rag, report
+from ..services import analytics, document_service, insights, notifications, rag, report
 from ..services.anomaly import detect_anomalies
 from ..services.data_service import get_dataframe, get_filter_options, get_session, has_data, remove_dataset, set_session_from_dataframe, upload_dataset
 from ..services.forecast import forecast, train_forecast_model
@@ -109,6 +109,17 @@ def ask(req: AskRequest):
         ) from exc
 
 
+@router.get("/notifications")
+def get_notifications():
+    return {"notifications": notifications.list_notifications()}
+
+
+@router.post("/notifications/read")
+def read_notifications():
+    notifications.mark_all_read()
+    return {"ok": True}
+
+
 @router.post("/upload")
 async def upload(file: UploadFile = File(...)):
     """Accepts any file type. Production datasets (CSV/XLSX/XLS) feed the analytics
@@ -142,6 +153,7 @@ async def upload(file: UploadFile = File(...)):
         message = f"{filename} processed - {result['chunk_count']} passages extracted from {result['pages']} page(s)."
         if result["ocr_unavailable_pages"]:
             message += f" {result['ocr_unavailable_pages']} page(s) looked scanned but OCR is not installed on this server, so no text could be extracted from them."
+        notifications.add_notification("document", f"{filename} is ready to cite in the AI Mining Assistant.")
         return {"ok": True, "kind": "document", "message": message, **result}
 
     try:
@@ -166,6 +178,31 @@ async def upload(file: UploadFile = File(...)):
             status_code=400,
             detail=f"Could not process the uploaded file ({exc.__class__.__name__}: {exc}).",
         ) from exc
+
+    rows = result.get("quality", {}).get("rows")
+    notifications.add_notification("dataset", f"Dataset uploaded: {filename} ({rows} rows processed).")
+
+    try:
+        anomaly_pack = detect_anomalies(get_dataframe())
+        primary = anomaly_pack.get("primary")
+        if primary and primary.get("severity") in ("HIGH", "CRITICAL"):
+            notifications.add_notification(
+                "anomaly",
+                f"A {primary['severity']} anomaly was flagged for {primary['year']} ({primary.get('deviation_pct')}% deviation).",
+            )
+    except Exception:
+        logger.exception("Could not check for anomalies to notify about after upload")
+
+    try:
+        kpi_pack = analytics.kpis()
+        achievement = kpi_pack.get("target_achievement_pct")
+        if achievement is not None and achievement < 80:
+            notifications.add_notification(
+                "target",
+                f"Target achievement is {achievement}%, below the 80% threshold.",
+            )
+    except Exception:
+        logger.exception("Could not check target achievement to notify about after upload")
 
     try:
         train_forecast_model()
@@ -310,13 +347,16 @@ def retrain_models():
     artifact = train_forecast_model(force=True)
     if artifact.get("status") == "insufficient_data":
         raise HTTPException(status_code=400, detail=artifact["message"])
+    notifications.add_notification("forecast", f"Forecast model retrained ({artifact.get('model_name', 'unknown model')}).")
     return {"ok": True, "artifact": artifact}
 
 
 @router.post("/report")
 def create_report(payload: ReportRequest | None = Body(default=None)):
     payload = payload or ReportRequest()
-    return report.build_report_data(mine=payload.mine, report_type=payload.report_type)
+    data = report.build_report_data(mine=payload.mine, report_type=payload.report_type)
+    notifications.add_notification("report", f"Report ready for {payload.mine or 'all mines'}.")
+    return data
 
 
 @router.get("/report/pdf")

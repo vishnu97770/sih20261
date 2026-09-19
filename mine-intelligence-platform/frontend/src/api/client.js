@@ -143,6 +143,8 @@ export const api = {
   suggestions: () => apiGet("/assistant/suggestions"),
   documents: () => apiGet("/documents"),
   wordcloud: () => apiGet("/insights/wordcloud"),
+  notifications: () => apiGet("/notifications"),
+  markNotificationsRead: () => apiJson("/notifications/read", "POST"),
 };
 
 export { request };
